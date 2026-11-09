@@ -207,8 +207,27 @@
           year: vehicle.year,
           make: vehicle.make,
           model: vehicle.model,
+          trim: vehicle.trim,
           plate: vehicle.plate,
           vin: vehicle.vin,
+          odometer: vehicle.odometer,
+          engineType: vehicle.engineType,
+          engineDisplacement: vehicle.engineDisplacement,
+          fuel: vehicle.fuel,
+          transmissionType: vehicle.transmissionType,
+          transmissionSpec: vehicle.transmissionSpec,
+          oilType: vehicle.oilType,
+          oilGrade: vehicle.oilGrade,
+          oilSpec: vehicle.oilSpec,
+          oilCapacity: vehicle.oilCapacity,
+          oilFilter: vehicle.oilFilter,
+          frontBrake: vehicle.frontBrake,
+          frontBrakeNotes: vehicle.frontBrakeNotes,
+          rearBrake: vehicle.rearBrake,
+          rearBrakeNotes: vehicle.rearBrakeNotes,
+          wiperLeft: vehicle.wiperLeft,
+          wiperRight: vehicle.wiperRight,
+          wiperRear: vehicle.wiperRear,
           legacyId: vehicle.legacyId
         });
       });
@@ -245,7 +264,11 @@
     Object.keys(now).forEach(function (id) {
       if (!then[id]) inserts.push(now[id]);
       else if (fingerprint(now[id]) !== fingerprint(then[id])) {
-        updates.push({ row: now[id], expectedVersion: then[id].version || 0 });
+        var localVersion = Number(now[id].version);
+        updates.push({
+          row: now[id],
+          expectedVersion: localVersion > 0 ? localVersion : (then[id].version || 0)
+        });
       }
     });
     Object.keys(then).forEach(function (id) {

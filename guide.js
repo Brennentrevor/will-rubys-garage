@@ -353,12 +353,16 @@ function saveGuideSpecs() {
 }
 
 function guideReview(q) {
-  var specs = q.vehicleSpecs || {};
+  var linked = (getVehiclesForCustomer(q.customerId) || []).find(function (row) { return sameId(row.id, q.vehicleId); });
+  var specs = Object.assign({}, (linked && specsSnapshot(linked)) || {}, q.vehicleSpecs || {});
   var specBits = Object.keys(specs).map(function (key) { return key + ': ' + specs[key]; });
+  var vin = q.vehicleVin || (linked && linked.vin) || '';
+  var odometer = q.vehicleOdometer || (linked && linked.odometer) || '';
+  var desc = q.vehicleDesc || (linked && (vehicleTitle(linked) || vehicleLabel(linked))) || 'No vehicle';
   return '<div class="card"><h3>5. Review</h3>' +
     '<p><strong>' + escapeHtml(q.customerName || 'Walk-in') + '</strong></p>' +
-    '<p>' + escapeHtml(q.vehicleDesc || 'No vehicle') + '</p>' +
-    '<p class="meta">' + escapeHtml([q.vehicleVin, q.vehicleOdometer ? 'Odo ' + q.vehicleOdometer : ''].filter(Boolean).join(' · ')) + '</p>' +
+    '<p>' + escapeHtml(desc) + '</p>' +
+    '<p class="meta">' + escapeHtml([vin, odometer ? 'Odo ' + odometer : ''].filter(Boolean).join(' · ')) + '</p>' +
     (specBits.length ? '<p class="help">' + escapeHtml(specBits.join(' · ')) + '</p>' : '<p class="help">No service specs yet.</p>') +
     '<button type="button" class="btn" id="guide-start" onclick="startQuoteLines()">Start quote</button></div>';
 }

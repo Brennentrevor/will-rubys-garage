@@ -890,7 +890,7 @@ function addPhoto(event) {
     if (!currentQuote || currentQuote.id !== quoteId) return;
     syncQuoteForm();
     if (!currentQuote.photos) currentQuote.photos = [];
-    currentQuote.photos.push({ dataUrl: dataUrl, caption: '', type: 'before' });
+    currentQuote.photos.push({ id: genId(), version: 0, dataUrl: dataUrl, caption: '', type: 'before', storagePath: '' });
     renderQuoteEditor();
   }).catch(function () {
     showToast('Could not read that photo. Try a JPEG or PNG.');
@@ -1181,12 +1181,12 @@ function buildDocumentHtml(doc, kind) {
   }).join('');
   var photos = (doc.photos || []).map(function (p) {
     var src = safeImageSrc(p.signedUrl || p.dataUrl);
-    if (!src) return '';
+    if (!src && !(p.caption || p.storagePath)) return '';
     var when = p.type === 'after' ? 'After' : 'Before';
     var caption = (p.caption || '').trim();
     var line = caption || when;
     if (caption && caption.toLowerCase().indexOf(when.toLowerCase()) !== 0) line = when + ' — ' + caption;
-    return '<figure class="doc-photo"><img src="' + src + '" alt="' + attr(line) + '">' +
+    return '<figure class="doc-photo">' + (src ? '<img src="' + src + '" alt="' + attr(line) + '">' : '') +
       '<figcaption>' + escapeHtml(line) + '</figcaption></figure>';
   }).join('');
   return '<article class="doc">' +
@@ -1706,6 +1706,7 @@ function loadTheirVersion() {
 function adoptShopState(next, conflicts) {
   var editor = document.getElementById('view-quote-editor');
   var editorOpen = editor && editor.classList.contains('active') && currentQuote;
+  if (editorOpen) syncQuoteForm();
   var keep = editorOpen ? cloneDoc(currentQuote) : null;
   state.settings = next.settings || state.settings;
   state.customers = next.customers || [];
@@ -1713,8 +1714,16 @@ function adoptShopState(next, conflicts) {
   state.invoices = next.invoices || [];
   state.timeEntries = next.timeEntries || [];
   if (keep) {
-    currentQuote = keep;
     var list = editKind === 'invoice' ? state.invoices : state.quotes;
+    var incoming = list.find(function (row) { return sameId(row.id, keep.id); });
+    if (incoming && WrgSync.documentFingerprint(keep) === WrgSync.documentFingerprint(incoming)) {
+      var step = keep.guideStep;
+      keep = cloneDoc(incoming);
+      if (step) keep.guideStep = step;
+    } else if (incoming && (incoming.version || 0) !== (keep.version || 0)) {
+      showConflictBanner([{ id: keep.id, message: 'Another phone saved this job. Your edit was not written over it.' }]);
+    }
+    currentQuote = keep;
     var idx = list.findIndex(function (row) { return sameId(row.id, keep.id); });
     if (idx >= 0) list[idx] = keep;
     else list.push(keep);

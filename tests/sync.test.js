@@ -47,6 +47,17 @@ test('unchanged shop state produces no writes', () => {
   assert.deepStrictEqual(sync.planPersist(state, state), []);
 });
 
+test('a stale local version is what the update must match', () => {
+  const shadow = sync.clone(base);
+  const current = sync.clone(base);
+  const quote = { id: 'q1', version: 4, number: '0001', date: '2026-11-09', status: 'draft', customerId: '', customerName: '', customerPhone: '', customerEmail: '', customerAddress: '', vehicleId: '', vehicleDesc: '', vehiclePlate: '', vehicleVin: '', taxRate: 6, notes: 'mine', workPerformed: '', items: [], photos: [] };
+  shadow.quotes = [Object.assign({}, quote, { version: 5, notes: 'theirs' })];
+  current.quotes = [quote];
+  const ops = sync.planPersist(current, shadow);
+  assert.strictEqual(ops.length, 1);
+  assert.strictEqual(ops[0].expectedVersion, 4);
+});
+
 test('a changed quote is an update pinned to the shadow version', () => {
   const shadow = sync.clone(base);
   shadow.quotes = [{ id: 'q1', version: 4, number: '0001', date: '2026-11-09', status: 'draft', customerId: '', customerName: '', customerPhone: '', customerEmail: '', customerAddress: '', vehicleId: '', vehicleDesc: '', vehiclePlate: '', vehicleVin: '', taxRate: 6, notes: '', workPerformed: '', items: [], photos: [] }];

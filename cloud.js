@@ -11,6 +11,7 @@
   var channel = null;
   var refreshTimer = null;
   var loading = false;
+  var saving = false;
 
   function config() {
     return window.WRG_CONFIG || {};
@@ -375,7 +376,7 @@
   }
 
   async function refresh() {
-    if (!online || !client) return;
+    if (!online || !client || saving) return;
     try {
       var remote = await fetchState();
       var dirty = window.shopDirtyIds ? window.shopDirtyIds() : [];
@@ -531,27 +532,33 @@
     var gate = WrgSync.canWrite(status());
     if (!gate.ok) return gate;
     if (!shadow) return { ok: false, message: 'Shop records are still loading.' };
-    var ops = WrgSync.planPersist(state, shadow);
-    if (!ops.length) return { ok: true };
-    var conflicts = [];
-    for (var i = 0; i < ops.length; i++) {
-      var result = await applyOp(ops[i], state);
-      if (!result.ok) {
-        if (result.conflict) conflicts.push(result);
-        else return result;
+    saving = true;
+    try {
+      var ops = WrgSync.planPersist(state, shadow);
+      if (!ops.length) return { ok: true };
+      var conflicts = [];
+      for (var i = 0; i < ops.length; i++) {
+        var result = await applyOp(ops[i], state);
+        if (!result.ok) {
+          if (result.conflict) conflicts.push(result);
+          else return result;
+        }
       }
+      if (conflicts.length) {
+        saving = false;
+        await refresh();
+        return {
+          ok: false,
+          conflict: true,
+          conflicts: conflicts,
+          message: conflicts[0].message
+        };
+      }
+      await load();
+      return { ok: true };
+    } finally {
+      saving = false;
     }
-    if (conflicts.length) {
-      await refresh();
-      return {
-        ok: false,
-        conflict: true,
-        conflicts: conflicts,
-        message: conflicts[0].message
-      };
-    }
-    await load();
-    return { ok: true };
   }
 
   async function signIn(pin) {
