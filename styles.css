@@ -65,6 +65,33 @@ body {
   opacity: 0.85;
   font-weight: 600;
 }
+.header-sub.sync-ok { color: #bbf7d0; }
+.header-sub.sync-warn { color: #fde68a; }
+.header-sub.sync-bad { color: #fecaca; }
+
+.field-stack { display: grid; gap: 12px; }
+.field-stack .form-group { margin-bottom: 0; }
+
+.step-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.step-pills span {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.step-pills span.active { background: #1e40af; color: white; }
+
+.spec-block { margin-top: 8px; }
+.conflict-banner {
+  margin: 12px 16px 0;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 0.9rem;
+}
 
 .bottom-nav {
   position: fixed;

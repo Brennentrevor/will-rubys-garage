@@ -83,6 +83,19 @@
     return roundMoney(cost * (1 + markup / 100));
   }
 
+  function defaultUnitPrice(type, unitCost, settings) {
+    settings = settings || {};
+    if (type === 'labor') return roundMoney(settings.laborRate);
+    return suggestPartPrice(unitCost, settings.partsMarkup);
+  }
+
+  function repriceFromCost(item, settings) {
+    item = item || {};
+    if (item.priceManual) return roundMoney(item.unitPrice);
+    if (item.type === 'labor') return roundMoney(item.unitPrice);
+    return suggestPartPrice(item.unitCost, (settings || {}).partsMarkup);
+  }
+
   function nextDocumentNumber(docs) {
     var max = 0;
     var list = Array.isArray(docs) ? docs : [];
@@ -100,6 +113,8 @@
     calcLine: calcLine,
     calcDocumentTotals: calcDocumentTotals,
     suggestPartPrice: suggestPartPrice,
+    defaultUnitPrice: defaultUnitPrice,
+    repriceFromCost: repriceFromCost,
     nextDocumentNumber: nextDocumentNumber
   };
 });

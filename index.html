@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Will Ruby’s Garage</title>
-  <meta name="description" content="Quotes, invoices, time tracking, and job photos for Will Ruby’s Garage. Records stay on this device.">
+  <meta name="description" content="Shared shop desk for Will Ruby’s Garage. Quotes, invoices, vehicles, and photos sync for the shop.">
   <meta name="theme-color" content="#1e3a8a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -21,7 +21,7 @@
       <img src="icon-192.png" alt="Will Ruby’s Garage">
       <div>
         <h1>Will Ruby’s Garage</h1>
-        <p class="header-sub">Shop desk</p>
+        <p id="sync-status" class="header-sub">Shop desk</p>
       </div>
     </header>
 
@@ -67,7 +67,14 @@
   <noscript>
     <p class="noscript">Will Ruby’s Garage needs JavaScript to run in this browser.</p>
   </noscript>
+  <script src="wrg-config.js"></script>
   <script src="calc.js"></script>
+  <script src="sync-model.js"></script>
+  <script src="vin.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
+  <script src="cloud.js"></script>
   <script src="app.js"></script>
+  <script src="guide.js"></script>
 </body>
 </html>

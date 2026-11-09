@@ -2,13 +2,18 @@
    Cache names are prefixed so this app does not delete caches
    belonging to other projects on the same GitHub Pages origin. */
 const CACHE_PREFIX = 'will-rubys-garage-';
-const CACHE_NAME = CACHE_PREFIX + 'v4';
+const CACHE_NAME = CACHE_PREFIX + 'v5';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './calc.js',
+  './sync-model.js',
+  './vin.js',
+  './cloud.js',
+  './guide.js',
   './app.js',
+  './wrg-config.js',
   './manifest.json',
   './favicon-32.png',
   './apple-touch-icon.png',
