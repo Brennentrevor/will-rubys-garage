@@ -28,6 +28,39 @@ test('suggests part price from markup', () => {
   assert.strictEqual(calc.suggestPartPrice(0, 40), 0);
 });
 
+test('labor default is the hourly rate and markup never changes it', () => {
+  const settings = { laborRate: 120, laborCostRate: 40, partsMarkup: 40 };
+  assert.strictEqual(calc.defaultUnitPrice('labor', 10, settings), 120);
+  assert.strictEqual(calc.defaultUnitPrice('labor', 10, { laborRate: 120, partsMarkup: 90 }), 120);
+  assert.strictEqual(calc.defaultUnitPrice('part', 50, settings), 70);
+  assert.strictEqual(calc.defaultUnitPrice('other', 50, settings), 70);
+});
+
+test('manual price override is kept and labor cost is not marked up', () => {
+  const settings = { laborRate: 120, partsMarkup: 40 };
+  const manual = { type: 'part', unitCost: 50, unitPrice: 55, priceManual: true };
+  assert.strictEqual(calc.repriceFromCost(manual, settings), 55);
+  const labor = { type: 'labor', unitCost: 10, unitPrice: 120, priceManual: false };
+  assert.strictEqual(calc.repriceFromCost(labor, { laborRate: 200, partsMarkup: 80 }), 120);
+  const part = { type: 'part', unitCost: 50, unitPrice: 10, priceManual: false };
+  assert.strictEqual(calc.repriceFromCost(part, settings), 70);
+});
+
+test('saved line prices stay put when shop defaults change', () => {
+  const savedPart = { type: 'part', qty: 1, unitCost: 50, unitPrice: 70, priceManual: false };
+  const savedLabor = { type: 'labor', qty: 2, unitCost: 40, unitPrice: 120, priceManual: false };
+  const oldSettings = { laborRate: 120, laborCostRate: 40, partsMarkup: 40, taxRate: 6 };
+  const newSettings = { laborRate: 180, laborCostRate: 60, partsMarkup: 80, taxRate: 8 };
+  assert.strictEqual(calc.calcLine(savedPart, oldSettings).revenue, 70);
+  assert.strictEqual(calc.calcLine(savedPart, newSettings).revenue, 70);
+  assert.strictEqual(calc.calcLine(savedLabor, oldSettings).revenue, 240);
+  assert.strictEqual(calc.calcLine(savedLabor, newSettings).revenue, 240);
+  const doc = calc.calcDocumentTotals({ taxRate: 6, items: [savedLabor, savedPart] }, newSettings);
+  assert.strictEqual(doc.subtotal, 310);
+  assert.strictEqual(doc.tax, 18.6);
+  assert.strictEqual(doc.profit, doc.subtotal - doc.cost);
+});
+
 test('labor line uses its own cost rate when set', () => {
   const line = calc.calcLine({ type: 'labor', qty: 1.5, unitCost: 40, unitPrice: 120 }, settings);
   assert.strictEqual(line.revenue, 180);

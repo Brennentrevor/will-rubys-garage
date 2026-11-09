@@ -1,40 +1,54 @@
 # Will Ruby’s Garage
 
-Shop desk for quotes, invoices, job photos, and time. It is an installable mobile web app with a light navy theme. Open the GitHub Pages address below with the trailing slash so the relative files load:
+Shared shop desk for quotes, invoices, vehicles, and job photos. This branch talks to the existing family Supabase project and is **not** the copy on `main` until that project is provisioned.
 
-https://brennentrevor.github.io/will-rubys-garage/
-
-That URL works after GitHub Pages is enabled for this repository from the `main` branch root.
+Shop URL after Pages is serving this branch: https://brennentrevor.github.io/will-rubys-garage/
 
 ## Sign-in
 
-The shop PIN is `1995`. It only unlocks the desk for the current browser session. It is not an account, and it does not encrypt records. Anyone who can open this browser’s saved site data can read them without the PIN.
+Everyone uses the same shop PIN. The app signs in to one shared Supabase Auth user for this browser session. The session is stored under `wrg-auth-session` in `sessionStorage`, separate from other apps on this GitHub Pages site. The PIN and the full password are not stored in the source. There is no per-person account and no separate admin role: anyone with the shop PIN can edit settings.
 
 ## Where records live
 
-Customers, vehicles, quotes, invoices, photos, time, and settings stay in this browser. They are not uploaded and they do not sync to another phone or computer.
+Rows live in `wrg_*` tables. Photos live in the private `wrg-photos` bucket. Anonymous users cannot read or write them. Only a signed-in user who is listed in `wrg_members` can. Maintenance and timekeeping accounts are not members.
 
-- Records: `localStorage` key `will-rubys-garage:data:v1`
-- Session gate: `sessionStorage` key `will-rubys-garage:session`
-- Offline shell: cache names that start with `will-rubys-garage-`
+While offline, the phone can show the last shop records loaded in this tab and will not save. A conflicting save from another phone is kept; this phone asks before replacing it.
 
-Those names are separate from other apps hosted on the same `github.io` site. The service worker only deletes caches with that prefix. Clearing this site’s browser data deletes the records. Settings can download a JSON backup and restore one later. That file contains whatever is on the device, including photos. Keep it private. This repository does not include customer records.
+An older device-only copy under `will-rubys-garage:data:v1` is not uploaded until someone taps **Copy this device into the shop**. That copy adds missing records and does not delete what is already in the shop.
 
-## Printing and email
+## Setup the parent still runs
 
-Print / Save PDF opens the browser’s print dialog. Choose Save as PDF there. Email opens the device mail app with a draft and the shop signature. This app never sends the message itself.
+1. In the Supabase SQL editor for `evgpnpqtnemlbnygpbxs`, run `wrg-setup.sql`.
+2. Authentication → Add user:
+   - Email: `wrg-shop@garage.example`
+   - Password: `wrg-access-` immediately followed by the shop PIN. Set that only in the dashboard.
+3. Copy that user’s UUID and insert it:
 
-The default contact email is `Brennentrevor@yahoo.com` until it is changed in Settings.
+```sql
+insert into public.wrg_members (user_id)
+values ('PASTE-USER-UUID')
+on conflict (user_id) do nothing;
+```
 
-## Install on iPhone
+4. Put the project’s public anon key in `wrg-config.js`. Do not put the service-role key in the app.
+5. After that, this branch can replace `main`.
 
-Open the Pages site in Safari, tap Share, then Add to Home Screen. After one online visit, the shell can open offline. The records still stay on that device.
+## Pricing
+
+New labor lines use hours × the hourly rate. Markup applies only to parts and other charges, and only until the price is typed by hand. Saved quote and invoice prices stay as stored when the defaults change.
+
+## VIN
+
+Barcode scans run on this phone with ZXing, including iPhone Safari. A photo of the barcode is decoded locally. A confirmed 17-character VIN can be sent as text to the public NHTSA vPIC service, which fills only year, make, model, trim, engine, fuel, and transmission when those values come back. Oil, brakes, and wipers are never guessed.
 
 ## Checks
 
 ```
 node tests/calc.test.js
+node tests/vin.test.js
+node tests/sync.test.js
+node tests/rls.test.js
 node --check app.js
-node --check calc.js
-node --check sw.js
+node --check guide.js
+node --check cloud.js
 ```

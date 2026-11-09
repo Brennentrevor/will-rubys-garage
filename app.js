@@ -92,9 +92,24 @@ function showToast(message) {
   showToast._t = setTimeout(function () { el.classList.remove('show'); }, 2600);
 }
 
+function newId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  var hex = '';
+  for (var i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
+  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-4' + hex.slice(13, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20, 32);
+}
+
 function genId() {
-  var id = state.nextId++;
-  return id;
+  state.nextId += 1;
+  return newId();
+}
+
+function sameId(a, b) {
+  return a != null && b != null && String(a) === String(b);
+}
+
+function jsId(id) {
+  return '\'' + String(id).replace(/\\/g, '\\\\').replace(/'/g, '\\\'') + '\'';
 }
 
 function ensureNextId() {
@@ -146,23 +161,40 @@ function loadData() {
   }
 }
 
-function saveData() {
-  try {
-    var payload = {
-      app: 'will-rubys-garage',
-      settings: state.settings,
-      customers: state.customers,
-      quotes: state.quotes,
-      invoices: state.invoices,
-      timeEntries: state.timeEntries,
-      nextId: state.nextId
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    return true;
-  } catch (err) {
-    showToast('This browser could not store that. Try fewer or smaller photos.');
+function canSave() {
+  if (!window.WrgCloud || !WrgCloud.isConfigured()) {
+    showToast('Shop cloud is not configured. Nothing was saved to the shared shop.');
     return false;
   }
+  var gate = WrgSync.canWrite(WrgCloud.status());
+  if (!gate.ok) {
+    showToast(gate.message);
+    setSyncStatus(WrgCloud.status());
+    return false;
+  }
+  return true;
+}
+
+function commitShop(okMessage) {
+  if (!canSave()) return Promise.resolve({ ok: false, code: 'blocked' });
+  setSyncStatus({ configured: true, signedIn: true, member: true, online: true, loading: true });
+  return WrgCloud.persist(state).then(function (result) {
+    setSyncStatus(WrgCloud.status());
+    if (!result || !result.ok) {
+      showToast((result && result.message) || 'Not saved.');
+      if (result && result.conflicts) showConflictBanner(result.conflicts);
+      return result || { ok: false };
+    }
+    if (okMessage) showToast(okMessage);
+    return result;
+  }).catch(function (err) {
+    showToast(err && err.message ? err.message : 'Save failed.');
+    return { ok: false, message: err && err.message };
+  });
+}
+
+function saveData() {
+  return commitShop(null);
 }
 
 function storageKb() {
@@ -175,7 +207,11 @@ function calcQuoteTotals(doc) {
 }
 
 function findCustomer(id) {
-  return state.customers.find(function (c) { return c.id === id; }) || null;
+  return state.customers.find(function (c) { return sameId(c.id, id); }) || null;
+}
+
+function findById(list, id) {
+  return (list || []).find(function (row) { return sameId(row.id, id); }) || null;
 }
 
 function vehicleLabel(v) {
@@ -197,7 +233,7 @@ function byDateDesc(a, b) {
   var da = a.date || '';
   var db = b.date || '';
   if (da !== db) return da < db ? 1 : -1;
-  return (b.id || 0) - (a.id || 0);
+  return String(a.id || '').localeCompare(String(b.id || ''));
 }
 
 function cloneDoc(doc) {
@@ -205,9 +241,15 @@ function cloneDoc(doc) {
 }
 
 function safeImageSrc(url) {
-  if (typeof url !== 'string' || url.length > 2000000) return '';
-  if (!/^data:image\/(?:jpeg|jpg|png|webp);base64,[a-z0-9+/=\s]+$/i.test(url)) return '';
-  return url;
+  if (typeof url !== 'string' || !url || url.length > 2000000) return '';
+  if (/^data:image\/(?:jpeg|jpg|png|webp);base64,[a-z0-9+/=\s]+$/i.test(url)) return url;
+  try {
+    var parsed = new URL(url, window.location.href);
+    if (parsed.protocol === 'https:' && parsed.hostname === 'evgpnpqtnemlbnygpbxs.supabase.co' && parsed.pathname.indexOf('/storage/v1/object/') !== -1) {
+      return url;
+    }
+  } catch (err) { /* ignore bad urls */ }
+  return '';
 }
 
 function refreshBrand() {
@@ -283,7 +325,7 @@ function renderDashboard() {
       (recent.length ? recent.map(function (row) {
         var t = calcQuoteTotals(row.doc);
         var label = row.kind === 'invoice' ? 'Invoice' : 'Quote';
-        return '<div class="list-item" onclick="openDocument(\'' + row.kind + '\',' + Number(row.doc.id) + ')">' +
+        return '<div class="list-item" onclick="openDocument(\'' + row.kind + '\',' + jsId(row.doc.id) + ')">' +
           '<div><strong>' + label + ' #' + escapeHtml(row.doc.number || row.doc.id) + '</strong>' +
           '<div class="meta">' + escapeHtml(row.doc.customerName || 'No customer') +
           (row.doc.vehicleDesc ? ' · ' + escapeHtml(row.doc.vehicleDesc) : '') +
@@ -380,7 +422,7 @@ function renderCustomers() {
     '<div class="card"><h3>Customers (' + customers.length + ')</h3>' +
       (customers.length ? customers.map(function (c) {
         var count = (c.vehicles || []).length;
-        return '<div class="list-item" onclick="showCustomer(' + Number(c.id) + ')">' +
+        return '<div class="list-item" onclick="showCustomer(' + jsId(c.id) + ')">' +
           '<div><strong>' + escapeHtml(c.name || 'Untitled') + '</strong>' +
           '<div class="meta">' + escapeHtml([c.phone, count + (count === 1 ? ' vehicle' : ' vehicles')].filter(Boolean).join(' · ')) + '</div></div>' +
           '<div>→</div></div>';
@@ -389,6 +431,7 @@ function renderCustomers() {
 }
 
 function saveNewCustomer() {
+  if (!canSave()) return;
   var name = ($('#new-name').value || '').trim();
   if (!name) {
     showToast('Name is required.');
@@ -396,16 +439,17 @@ function saveNewCustomer() {
   }
   state.customers.push({
     id: genId(),
+    version: 0,
     name: name,
     phone: ($('#new-phone').value || '').trim(),
     email: ($('#new-email').value || '').trim(),
     address: ($('#new-address').value || '').trim(),
     vehicles: []
   });
-  if (saveData()) {
-    showToast('Customer saved on this device.');
+  commitShop('Customer saved in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
     renderCustomers();
-  }
+  });
 }
 
 function showCustomer(id) {
@@ -415,52 +459,30 @@ function showCustomer(id) {
     return;
   }
   if (!Array.isArray(c.vehicles)) c.vehicles = [];
+  window.vehicleSaveTarget = 'customer';
   var el = $('#view-customer-detail');
   el.innerHTML =
     '<div class="toolbar"><button type="button" class="btn-sm btn-secondary" onclick="showView(\'customers\')">← Back</button></div>' +
     '<div class="card mt-2"><h3>Customer</h3>' +
     '<form onsubmit="event.preventDefault(); saveCustomerEdits();">' +
-      '<input type="hidden" id="edit-id" value="' + Number(c.id) + '">' +
+      '<input type="hidden" id="edit-id" value="' + attr(c.id) + '">' +
       '<div class="form-group"><label for="edit-name">Name</label><input id="edit-name" maxlength="120" required value="' + attr(c.name) + '"></div>' +
       '<div class="form-group"><label for="edit-phone">Phone</label><input id="edit-phone" type="tel" maxlength="40" value="' + attr(c.phone) + '"></div>' +
       '<div class="form-group"><label for="edit-email">Email</label><input id="edit-email" type="email" maxlength="120" value="' + attr(c.email) + '"></div>' +
       '<div class="form-group"><label for="edit-address">Address</label><textarea id="edit-address">' + escapeHtml(c.address || '') + '</textarea></div>' +
       '<button class="btn" type="submit" id="edit-customer-save">Save changes</button>' +
     '</form>' +
-    '<button type="button" class="btn btn-danger" id="delete-customer" onclick="deleteCustomer(' + Number(c.id) + ')">Delete customer</button>' +
+    '<button type="button" class="btn btn-danger" id="delete-customer" onclick="deleteCustomer(' + jsId(c.id) + ')">Delete customer</button>' +
     '</div>' +
-    '<div class="card"><div class="flex-between"><h3>Vehicles</h3></div>' +
-      (c.vehicles.length ? c.vehicles.map(function (v) {
-        return '<div class="list-item">' +
-          '<div><strong>' + escapeHtml(vehicleLabel(v) || 'Vehicle') + '</strong>' +
-          '<div class="meta">' + escapeHtml([v.plate, v.vin].filter(Boolean).join(' · ')) + '</div></div>' +
-          '<div class="row-actions">' +
-            '<button type="button" class="btn-sm btn-secondary" onclick="editVehicle(' + Number(c.id) + ',' + Number(v.id) + ')">Edit</button>' +
-            '<button type="button" class="btn-sm btn-danger" onclick="deleteVehicle(' + Number(c.id) + ',' + Number(v.id) + ')">Delete</button>' +
-          '</div></div>';
-      }).join('') : '<p class="text-muted">No vehicles yet.</p>') +
-      '<form class="mt-2" onsubmit="event.preventDefault(); saveVehicle();">' +
-        '<input type="hidden" id="veh-id" value="">' +
-        '<div class="row">' +
-          '<div><span class="mini-label">Year</span><input id="veh-year" inputmode="numeric" maxlength="4" placeholder="2014"></div>' +
-          '<div><span class="mini-label">Make</span><input id="veh-make" maxlength="40" placeholder="Honda"></div>' +
-          '<div><span class="mini-label">Model</span><input id="veh-model" maxlength="40" placeholder="Civic"></div>' +
-        '</div>' +
-        '<div class="row mt-2">' +
-          '<div><span class="mini-label">Plate</span><input id="veh-plate" maxlength="20"></div>' +
-          '<div><span class="mini-label">VIN</span><input id="veh-vin" maxlength="20"></div>' +
-        '</div>' +
-        '<button class="btn" type="submit" id="veh-save">Add vehicle</button>' +
-      '</form>' +
-    '</div>' +
-    '<button type="button" class="btn" onclick="newQuoteForCustomer(' + Number(c.id) + ')">New quote for ' + escapeHtml((c.name || 'customer').split(' ')[0]) + '</button>';
+    (typeof vehicleSectionHtml === 'function' ? vehicleSectionHtml(c) : '') +
+    '<button type="button" class="btn" onclick="newQuoteForCustomer(' + jsId(c.id) + ')">New quote for ' + escapeHtml((c.name || 'customer').split(' ')[0]) + '</button>';
   showView('customer-detail');
 }
 
 function readCustomerFields() {
   var idEl = $('#edit-id');
   if (!idEl) return null;
-  var c = findCustomer(parseInt(idEl.value, 10));
+  var c = findCustomer(idEl.value);
   if (!c) return null;
   var name = ($('#edit-name').value || '').trim();
   if (name) c.name = name;
@@ -473,81 +495,92 @@ function readCustomerFields() {
 }
 
 function saveCustomerEdits() {
+  if (!canSave()) return;
   var c = readCustomerFields();
   if (!c || !($('#edit-name').value || '').trim()) {
     showToast('Name is required.');
     return;
   }
-  if (saveData()) {
-    showToast('Customer saved on this device.');
+  commitShop('Customer saved in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
     showCustomer(c.id);
-  }
+  });
 }
 
 function deleteCustomer(id) {
   var c = findCustomer(id);
   if (!c) return;
-  if (!confirm('Remove ' + (c.name || 'this customer') + ' from this device? Saved quotes and invoices keep the name already printed on them.')) return;
-  state.customers = state.customers.filter(function (row) { return row.id !== id; });
-  saveData();
-  showToast('Customer removed from this device.');
-  showView('customers');
+  if (!confirm('Remove ' + (c.name || 'this customer') + ' from the shared shop? Saved quotes and invoices keep the name already printed on them.')) return;
+  if (!canSave()) return;
+  state.customers = state.customers.filter(function (row) { return !sameId(row.id, id); });
+  commitShop('Customer removed from the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    showView('customers');
+  });
 }
 
 function editVehicle(customerId, vehicleId) {
   var c = findCustomer(customerId);
-  var v = c && (c.vehicles || []).find(function (row) { return row.id === vehicleId; });
+  var v = c && (c.vehicles || []).find(function (row) { return sameId(row.id, vehicleId); });
   if (!v) return;
-  $('#veh-id').value = v.id;
-  $('#veh-year').value = v.year || '';
-  $('#veh-make').value = v.make || '';
-  $('#veh-model').value = v.model || '';
-  $('#veh-plate').value = v.plate || '';
-  $('#veh-vin').value = v.vin || '';
-  $('#veh-save').textContent = 'Save vehicle';
-  $('#veh-year').focus();
+  window.vehicleSaveTarget = 'customer';
+  fillVehicleForm(v);
+  var specs = document.querySelector('#vehicle-form details');
+  if (specs) specs.open = true;
+  var year = document.getElementById('veh-year');
+  if (year) year.focus();
 }
 
 function saveVehicle() {
-  var c = readCustomerFields();
-  if (!c) return;
-  var year = ($('#veh-year').value || '').trim();
-  var make = ($('#veh-make').value || '').trim();
-  var model = ($('#veh-model').value || '').trim();
-  if (!year || !make || !model) {
-    showToast('Year, make, and model are required.');
+  if (!canSave()) return;
+  var fields = collectVehicleForm();
+  if (!fields.year || !fields.make || !fields.model) {
+    showToast('Year, make, and model are required. Service specs can stay blank.');
     return;
   }
-  if (!Array.isArray(c.vehicles)) c.vehicles = [];
-  var existingId = parseInt($('#veh-id').value, 10);
-  var payload = {
-    year: year,
-    make: make,
-    model: model,
-    plate: ($('#veh-plate').value || '').trim(),
-    vin: ($('#veh-vin').value || '').trim()
-  };
-  if (Number.isFinite(existingId)) {
-    var v = c.vehicles.find(function (row) { return row.id === existingId; });
-    if (v) Object.assign(v, payload);
-  } else {
-    payload.id = genId();
-    c.vehicles.push(payload);
+  if (fields.vin && window.WrgVin && !WrgVin.isValidVin(fields.vin)) {
+    showToast('VIN must be 17 characters and cannot use I, O, or Q. Leave it blank if unknown.');
+    return;
   }
-  if (saveData()) {
-    showToast('Vehicle saved on this device.');
-    showCustomer(c.id);
+  var target = window.vehicleSaveTarget || 'customer';
+  var customer = target === 'customer' ? readCustomerFields() : findCustomer(currentQuote && currentQuote.customerId);
+  if (!customer) {
+    showToast('Save the customer before adding a vehicle.');
+    return;
   }
+  if (!Array.isArray(customer.vehicles)) customer.vehicles = [];
+  var existing = fields.id ? customer.vehicles.find(function (row) { return sameId(row.id, fields.id); }) : null;
+  if (existing) Object.assign(existing, fields, { id: existing.id, version: existing.version || 0, customerId: customer.id });
+  else {
+    existing = Object.assign(blankVehicle(), fields, { id: genId(), version: 0, customerId: customer.id });
+    customer.vehicles.push(existing);
+  }
+  if (currentQuote && (target === 'quote' || target === 'guide' || target === 'guide-specs')) {
+    currentQuote.customerId = customer.id;
+    currentQuote.vehicleId = existing.id;
+    snapshotParty(currentQuote);
+    if (target === 'guide' || target === 'guide-specs') currentQuote.guideStep = target === 'guide-specs' ? 'review' : 'basics';
+  }
+  var returnCustomer = customer.id;
+  commitShop('Vehicle saved in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    window.vehicleSaveTarget = 'customer';
+    if (target === 'customer') showCustomer(returnCustomer);
+    else renderQuoteEditor();
+  });
 }
 
 function deleteVehicle(customerId, vehicleId) {
   var c = findCustomer(customerId);
   if (!c) return;
-  if (!confirm('Remove this vehicle from the customer on this device?')) return;
+  if (!confirm('Remove this vehicle from the customer in the shared shop? Older quotes keep the description already saved on them.')) return;
+  if (!canSave()) return;
   readCustomerFields();
-  c.vehicles = (c.vehicles || []).filter(function (v) { return v.id !== vehicleId; });
-  saveData();
-  showCustomer(customerId);
+  c.vehicles = (c.vehicles || []).filter(function (v) { return !sameId(v.id, vehicleId); });
+  commitShop('Vehicle removed from the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    showCustomer(customerId);
+  });
 }
 
 function renderQuotes() {
@@ -559,7 +592,7 @@ function renderQuotes() {
       (quotes.length ? quotes.map(function (q) {
         var t = calcQuoteTotals(q);
         var status = q.status || 'draft';
-        return '<div class="list-item" onclick="viewQuote(' + Number(q.id) + ')">' +
+        return '<div class="list-item" onclick="viewQuote(' + jsId(q.id) + ')">' +
           '<div><strong>Quote #' + escapeHtml(q.number) + '</strong>' +
           '<div class="meta">' + escapeHtml(q.customerName || 'Walk-in') +
           (q.vehicleDesc ? ' · ' + escapeHtml(q.vehicleDesc) : '') +
@@ -578,7 +611,7 @@ function renderInvoices() {
       (invoices.length ? invoices.map(function (inv) {
         var t = calcQuoteTotals(inv);
         var status = inv.status || 'sent';
-        return '<div class="list-item" onclick="viewInvoice(' + Number(inv.id) + ')">' +
+        return '<div class="list-item" onclick="viewInvoice(' + jsId(inv.id) + ')">' +
           '<div><strong>Invoice #' + escapeHtml(inv.number) + '</strong>' +
           '<div class="meta">' + escapeHtml(inv.customerName || 'Customer') +
           (inv.vehicleDesc ? ' · ' + escapeHtml(inv.vehicleDesc) : '') +
@@ -612,7 +645,11 @@ function showNewQuote(customerId) {
     vehicleVin: '',
     notes: '',
     photos: [],
-    workPerformed: ''
+    workPerformed: '',
+    guideStep: customerId ? 'vehicle' : 'customer',
+    vehicleTrim: '',
+    vehicleOdometer: '',
+    vehicleSpecs: {}
   };
   var c = findCustomer(customerId);
   if (c) {
@@ -640,7 +677,7 @@ function maybeAutosave() {
 
 function viewQuote(id) {
   captureEditorIfOpen();
-  var q = state.quotes.find(function (row) { return row.id === id; });
+  var q = state.quotes.find(function (row) { return sameId(row.id, id); });
   if (!q) return;
   editKind = 'quote';
   editIsNew = false;
@@ -653,7 +690,7 @@ function viewQuote(id) {
 
 function editInvoice(id) {
   captureEditorIfOpen();
-  var inv = state.invoices.find(function (row) { return row.id === id; });
+  var inv = state.invoices.find(function (row) { return sameId(row.id, id); });
   if (!inv) return;
   editKind = 'invoice';
   editIsNew = false;
@@ -670,21 +707,25 @@ function renderQuoteEditor() {
   if (!q || !el) return;
   var customers = state.customers;
   var vehicles = getVehiclesForCustomer(q.customerId);
+  if (q.guideStep && q.guideStep !== 'lines' && typeof renderQuoteGuide === 'function') {
+    el.innerHTML = renderQuoteGuide(q);
+    return;
+  }
   var isInvoice = editKind === 'invoice';
   var title = (isInvoice ? 'Invoice #' : 'Quote #') + escapeHtml(q.number);
   var customerOptions = '<option value="">Walk-in / cash</option>' +
     customers.map(function (c) {
-      return '<option value="' + Number(c.id) + '"' + (q.customerId === c.id ? ' selected' : '') + '>' + escapeHtml(c.name || 'Customer') + '</option>';
+      return '<option value="' + attr(c.id) + '"' + (q.customerId === c.id ? ' selected' : '') + '>' + escapeHtml(c.name || 'Customer') + '</option>';
     }).join('');
   if (q.customerId && !customers.some(function (c) { return c.id === q.customerId; })) {
-    customerOptions += '<option value="' + Number(q.customerId) + '" selected>' + escapeHtml(q.customerName || 'Saved customer') + '</option>';
+    customerOptions += '<option value="' + attr(q.customerId) + '" selected>' + escapeHtml(q.customerName || 'Saved customer') + '</option>';
   }
   var vehicleOptions = '<option value="">No vehicle</option>' +
     vehicles.map(function (v) {
-      return '<option value="' + Number(v.id) + '"' + (q.vehicleId === v.id ? ' selected' : '') + '>' + escapeHtml(vehicleLabel(v)) + '</option>';
+      return '<option value="' + attr(v.id) + '"' + (q.vehicleId === v.id ? ' selected' : '') + '>' + escapeHtml(vehicleLabel(v)) + '</option>';
     }).join('');
   if (q.vehicleId && !vehicles.some(function (v) { return v.id === q.vehicleId; })) {
-    vehicleOptions += '<option value="' + Number(q.vehicleId) + '" selected>' + escapeHtml(q.vehicleDesc || 'Saved vehicle') + '</option>';
+    vehicleOptions += '<option value="' + attr(q.vehicleId) + '" selected>' + escapeHtml(q.vehicleDesc || 'Saved vehicle') + '</option>';
   }
 
   el.innerHTML =
@@ -695,7 +736,8 @@ function renderQuoteEditor() {
       '<div class="card mt-2">' +
         '<div class="form-group"><label for="q-customer">Customer</label><select id="q-customer" onchange="updateQuoteCustomer()">' + customerOptions + '</select></div>' +
         '<div class="form-group"><label for="q-vehicle">Vehicle</label><select id="q-vehicle" onchange="updateQuoteVehicle()">' + vehicleOptions + '</select></div>' +
-        '<div class="row">' +
+        (typeof quoteVehicleActions === 'function' ? quoteVehicleActions() : '') +
+        '<div class="field-stack">' +
           '<div class="form-group"><label for="q-date">Date</label><input type="date" id="q-date" value="' + attr(q.date || todayISO()) + '" oninput="currentQuote.date=this.value"></div>' +
           '<div class="form-group"><label for="q-tax">Tax rate (%)</label><input type="number" id="q-tax" step="0.1" value="' + attr(q.taxRate != null ? q.taxRate : state.settings.taxRate) + '" oninput="updateQuoteTax(this.value)"></div>' +
         '</div>' +
@@ -759,7 +801,7 @@ function renderPhotoEditors() {
   var photos = currentQuote.photos || [];
   if (!photos.length) return '<p class="text-muted">No photos yet. Add a before or after picture.</p>';
   return photos.map(function (p, i) {
-    var src = safeImageSrc(p.dataUrl);
+    var src = safeImageSrc(p.signedUrl || p.dataUrl);
     return '<div class="photo-card">' +
       (src ? '<img alt="" src="' + src + '">' : '<p class="text-muted">Photo could not be shown.</p>') +
       '<div class="row mt-2">' +
@@ -781,10 +823,12 @@ function updateLine(idx, field, value) {
     var item = currentQuote.items[idx];
     item.type = value;
     if (value === 'labor') {
+      item.priceManual = false;
       item.unitCost = Number(state.settings.laborCostRate) || 0;
-      item.unitPrice = Number(state.settings.laborRate) || 0;
+      item.unitPrice = GarageCalc.defaultUnitPrice('labor', item.unitCost, state.settings);
       if (!item.qty) item.qty = 1;
-    } else if (value === 'part') {
+    } else {
+      item.priceManual = false;
       item.unitCost = 0;
       item.unitPrice = 0;
     }
@@ -798,8 +842,9 @@ function updateLine(idx, field, value) {
   } else {
     row[field] = value;
   }
-  if (field === 'unitCost' && row.type === 'part') {
-    row.unitPrice = GarageCalc.suggestPartPrice(row.unitCost, state.settings.partsMarkup);
+  if (field === 'unitPrice') row.priceManual = true;
+  if (field === 'unitCost' && row.type !== 'labor' && !row.priceManual) {
+    row.unitPrice = GarageCalc.repriceFromCost(row, state.settings);
     var priceInput = document.querySelector('[data-line="' + idx + '"][data-field="unitPrice"]');
     if (priceInput) priceInput.value = row.unitPrice.toFixed(2);
   }
@@ -816,7 +861,8 @@ function addLineItem() {
     description: '',
     qty: 1,
     unitCost: Number(state.settings.laborCostRate) || 0,
-    unitPrice: Number(state.settings.laborRate) || 0
+    unitPrice: GarageCalc.defaultUnitPrice('labor', state.settings.laborCostRate, state.settings),
+    priceManual: false
   });
   renderQuoteEditor();
 }
@@ -844,7 +890,7 @@ function addPhoto(event) {
     if (!currentQuote || currentQuote.id !== quoteId) return;
     syncQuoteForm();
     if (!currentQuote.photos) currentQuote.photos = [];
-    currentQuote.photos.push({ dataUrl: dataUrl, caption: '', type: 'before' });
+    currentQuote.photos.push({ id: genId(), version: 0, dataUrl: dataUrl, caption: '', type: 'before', storagePath: '' });
     renderQuoteEditor();
   }).catch(function () {
     showToast('Could not read that photo. Try a JPEG or PNG.');
@@ -922,15 +968,9 @@ function syncQuoteForm() {
   var date = $('#q-date');
   if (date && date.value) currentQuote.date = date.value;
   var cust = $('#q-customer');
-  if (cust) {
-    var cid = parseInt(cust.value, 10);
-    currentQuote.customerId = Number.isFinite(cid) ? cid : null;
-  }
+  if (cust) currentQuote.customerId = cust.value || null;
   var veh = $('#q-vehicle');
-  if (veh) {
-    var vid = parseInt(veh.value, 10);
-    currentQuote.vehicleId = Number.isFinite(vid) ? vid : null;
-  }
+  if (veh) currentQuote.vehicleId = veh.value || null;
   document.querySelectorAll('.line-item').forEach(function (rowEl) {
     var idx = Number(rowEl.getAttribute('data-idx'));
     var item = currentQuote.items && currentQuote.items[idx];
@@ -982,13 +1022,19 @@ function snapshotParty(doc) {
   var vehicles = getVehiclesForCustomer(doc.customerId);
   var v = vehicles.find(function (row) { return row.id === doc.vehicleId; });
   if (v) {
-    doc.vehicleDesc = vehicleLabel(v);
+    doc.vehicleDesc = vehicleTitle(v) || vehicleLabel(v);
     doc.vehiclePlate = v.plate || '';
     doc.vehicleVin = v.vin || '';
+    doc.vehicleTrim = v.trim || '';
+    doc.vehicleOdometer = v.odometer || '';
+    doc.vehicleSpecs = typeof specsSnapshot === 'function' ? specsSnapshot(v) : {};
   } else if (!doc.vehicleId) {
     doc.vehicleDesc = '';
     doc.vehiclePlate = '';
     doc.vehicleVin = '';
+    doc.vehicleTrim = '';
+    doc.vehicleOdometer = '';
+    doc.vehicleSpecs = {};
   }
 }
 
@@ -1020,20 +1066,23 @@ function buildMailtoFromEditor() {
 }
 
 function persistQuote() {
-  if (!currentQuote) return false;
+  if (!currentQuote) return Promise.resolve({ ok: false });
+  if (!canSave()) return Promise.resolve({ ok: false });
   syncQuoteForm();
   var list = editKind === 'invoice' ? state.invoices : state.quotes;
-  var idx = list.findIndex(function (row) { return row.id === currentQuote.id; });
+  var idx = list.findIndex(function (row) { return sameId(row.id, currentQuote.id); });
   if (idx >= 0) list[idx] = currentQuote;
   else list.push(currentQuote);
   editIsNew = false;
-  return saveData();
+  return commitShop(null);
 }
 
 function saveQuote() {
-  if (!persistQuote()) return;
-  showToast((editKind === 'invoice' ? 'Invoice' : 'Quote') + ' saved on this device.');
-  showView(editKind === 'invoice' ? 'invoices' : 'quotes');
+  persistQuote().then(function (result) {
+    if (!result || !result.ok) return;
+    showToast((editKind === 'invoice' ? 'Invoice' : 'Quote') + ' saved in the shop.');
+    showView(editKind === 'invoice' ? 'invoices' : 'quotes');
+  });
 }
 
 function closeEditor() {
@@ -1045,14 +1094,16 @@ function deleteCurrentDocument() {
   var kind = editKind;
   var id = currentQuote.id;
   var label = kind === 'invoice' ? 'invoice' : 'quote';
-  if (!confirm('Delete this ' + label + ' from this device?')) return;
-  if (kind === 'invoice') state.invoices = state.invoices.filter(function (row) { return row.id !== id; });
-  else state.quotes = state.quotes.filter(function (row) { return row.id !== id; });
+  if (!confirm('Delete this ' + label + ' from the shared shop?')) return;
+  if (!canSave()) return;
+  if (kind === 'invoice') state.invoices = state.invoices.filter(function (row) { return !sameId(row.id, id); });
+  else state.quotes = state.quotes.filter(function (row) { return !sameId(row.id, id); });
   currentQuote = null;
   editIsNew = true;
-  saveData();
-  showToast('Deleted from this device.');
-  showView(kind === 'invoice' ? 'invoices' : 'quotes');
+  commitShop('Deleted from the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    showView(kind === 'invoice' ? 'invoices' : 'quotes');
+  });
 }
 
 function convertToInvoice() {
@@ -1061,24 +1112,34 @@ function convertToInvoice() {
   if (currentQuote.status === 'converted') {
     if (!confirm('This quote was already converted. Create another invoice?')) return;
   }
-  if (!persistQuote()) return;
+  if (!canSave()) return;
+  syncQuoteForm();
+  var list = state.quotes;
+  var idx = list.findIndex(function (row) { return sameId(row.id, currentQuote.id); });
+  if (idx >= 0) list[idx] = currentQuote;
+  else list.push(currentQuote);
+  editIsNew = false;
   var inv = cloneDoc(currentQuote);
   inv.id = genId();
+  inv.version = 0;
+  inv.guideStep = 'lines';
   inv.number = GarageCalc.nextDocumentNumber(state.invoices);
   inv.status = 'sent';
   inv.quoteId = currentQuote.id;
   delete inv.paidDate;
   state.invoices.push(inv);
   currentQuote.status = 'converted';
-  var saved = state.quotes.find(function (q) { return q.id === currentQuote.id; });
+  var saved = state.quotes.find(function (q) { return sameId(q.id, currentQuote.id); });
   if (saved) saved.status = 'converted';
-  saveData();
-  showToast('Invoice created on this device.');
-  viewInvoice(inv.id);
+  var invoiceId = inv.id;
+  commitShop('Invoice created in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    viewInvoice(invoiceId);
+  });
 }
 
 function viewInvoice(id) {
-  var inv = state.invoices.find(function (row) { return row.id === id; });
+  var inv = state.invoices.find(function (row) { return sameId(row.id, id); });
   if (!inv) return;
   var t = calcQuoteTotals(inv);
   var status = inv.status || 'sent';
@@ -1086,11 +1147,11 @@ function viewInvoice(id) {
   el.innerHTML =
     '<div class="no-print toolbar">' +
       '<button type="button" class="btn-sm btn-secondary" onclick="showView(\'invoices\')">← Back</button>' +
-      '<button type="button" class="btn-sm" id="edit-invoice" onclick="editInvoice(' + Number(inv.id) + ')">Edit</button>' +
+      '<button type="button" class="btn-sm" id="edit-invoice" onclick="editInvoice(' + jsId(inv.id) + ')">Edit</button>' +
       '<button type="button" class="btn-sm" id="print-invoice" onclick="saveAsPDF()">Print / Save PDF</button>' +
-      '<a class="btn-sm btn-secondary" id="email-invoice" href="' + attr(mailtoHref(inv, 'invoice')) + '" onclick="this.href=mailtoForInvoice(' + Number(inv.id) + ')">Email</a>' +
-      '<button type="button" class="btn-sm btn-success" id="mark-paid" onclick="togglePaid(' + Number(inv.id) + ')">' + (status === 'paid' ? 'Mark unpaid' : 'Mark paid') + '</button>' +
-      '<button type="button" class="btn-sm btn-danger" id="delete-invoice" onclick="deleteInvoice(' + Number(inv.id) + ')">Delete</button>' +
+      '<a class="btn-sm btn-secondary" id="email-invoice" href="' + attr(mailtoHref(inv, 'invoice')) + '" onclick="this.href=mailtoForInvoice(' + jsId(inv.id) + ')">Email</a>' +
+      '<button type="button" class="btn-sm btn-success" id="mark-paid" onclick="togglePaid(' + jsId(inv.id) + ')">' + (status === 'paid' ? 'Mark unpaid' : 'Mark paid') + '</button>' +
+      '<button type="button" class="btn-sm btn-danger" id="delete-invoice" onclick="deleteInvoice(' + jsId(inv.id) + ')">Delete</button>' +
     '</div>' +
     '<p class="help no-print">Print opens the browser dialog. Choose Save as PDF there. Email opens a draft in your mail app and does not send by itself.</p>' +
     '<div class="mt-2">' + buildDocumentHtml(inv, 'invoice') + '</div>' +
@@ -1108,7 +1169,7 @@ function buildDocumentHtml(doc, kind) {
   var contact = escapeHtml([s.phone, s.email || DEFAULT_EMAIL].filter(Boolean).join(' · '));
   var billAddress = doc.customerAddress ? '<div>' + textBreaks(doc.customerAddress) + '</div>' : '';
   var billContact = [doc.customerPhone, doc.customerEmail].filter(Boolean).join(' · ');
-  var vehicleBits = [doc.vehicleDesc, doc.vehiclePlate, doc.vehicleVin].filter(Boolean);
+  var vehicleBits = [doc.vehicleDesc, doc.vehiclePlate, doc.vehicleVin ? 'VIN ' + doc.vehicleVin : '', doc.vehicleOdometer ? 'Odo ' + doc.vehicleOdometer : ''].filter(Boolean);
   var rows = (doc.items || []).map(function (item) {
     var qty = item.qty != null ? item.qty : 1;
     var amount = GarageCalc.roundMoney((Number(qty) || 0) * (Number(item.unitPrice) || 0));
@@ -1119,13 +1180,13 @@ function buildDocumentHtml(doc, kind) {
       '<td class="num">' + formatMoney(amount) + '</td></tr>';
   }).join('');
   var photos = (doc.photos || []).map(function (p) {
-    var src = safeImageSrc(p.dataUrl);
-    if (!src) return '';
+    var src = safeImageSrc(p.signedUrl || p.dataUrl);
+    if (!src && !(p.caption || p.storagePath)) return '';
     var when = p.type === 'after' ? 'After' : 'Before';
     var caption = (p.caption || '').trim();
     var line = caption || when;
     if (caption && caption.toLowerCase().indexOf(when.toLowerCase()) !== 0) line = when + ' — ' + caption;
-    return '<figure class="doc-photo"><img src="' + src + '" alt="' + attr(line) + '">' +
+    return '<figure class="doc-photo">' + (src ? '<img src="' + src + '" alt="' + attr(line) + '">' : '') +
       '<figcaption>' + escapeHtml(line) + '</figcaption></figure>';
   }).join('');
   return '<article class="doc">' +
@@ -1143,6 +1204,7 @@ function buildDocumentHtml(doc, kind) {
     '<div class="doc-totals"><div><span>Subtotal</span><span data-doc="subtotal">' + formatMoney(t.subtotal) + '</span></div>' +
       '<div><span>Tax (' + escapeHtml(String(t.taxRate)) + '%)</span><span data-doc="tax">' + formatMoney(t.tax) + '</span></div>' +
       '<div class="doc-grand"><span>Total</span><span data-doc="total">' + formatMoney(t.total) + '</span></div></div>' +
+    (typeof serviceSpecsHtml === 'function' ? serviceSpecsHtml(doc.vehicleSpecs) : '') +
     (doc.workPerformed ? '<section class="doc-section doc-work"><h3>Work performed</h3><p>' + textBreaks(doc.workPerformed) + '</p></section>' : '') +
     (photos ? '<section class="doc-section"><h3>Photos</h3><div class="doc-photos">' + photos + '</div></section>' : '') +
     '<footer class="doc-terms doc-section">' + textBreaks(s.terms || '') + '</footer>' +
@@ -1182,13 +1244,14 @@ function mailtoHref(doc, kind) {
 }
 
 function mailtoForInvoice(id) {
-  var inv = state.invoices.find(function (row) { return row.id === id; });
+  var inv = state.invoices.find(function (row) { return sameId(row.id, id); });
   return inv ? mailtoHref(inv, 'invoice') : 'mailto:';
 }
 
 function togglePaid(id) {
-  var inv = state.invoices.find(function (row) { return row.id === id; });
+  var inv = state.invoices.find(function (row) { return sameId(row.id, id); });
   if (!inv) return;
+  if (!canSave()) return;
   if (inv.status === 'paid') {
     inv.status = 'sent';
     delete inv.paidDate;
@@ -1196,17 +1259,21 @@ function togglePaid(id) {
     inv.status = 'paid';
     inv.paidDate = todayISO();
   }
-  saveData();
-  viewInvoice(id);
+  commitShop(inv.status === 'paid' ? 'Marked paid in the shop.' : 'Marked unpaid in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    viewInvoice(id);
+  });
 }
 
 function deleteInvoice(id) {
-  if (!confirm('Delete this invoice from this device?')) return;
-  state.invoices = state.invoices.filter(function (row) { return row.id !== id; });
-  if (currentQuote && currentQuote.id === id && editKind === 'invoice') currentQuote = null;
-  saveData();
-  showToast('Invoice deleted from this device.');
-  showView('invoices');
+  if (!confirm('Delete this invoice from the shared shop?')) return;
+  if (!canSave()) return;
+  state.invoices = state.invoices.filter(function (row) { return !sameId(row.id, id); });
+  if (currentQuote && sameId(currentQuote.id, id) && editKind === 'invoice') currentQuote = null;
+  commitShop('Invoice deleted from the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    showView('invoices');
+  });
 }
 
 function renderTime() {
@@ -1238,8 +1305,8 @@ function renderTime() {
           '<div><strong>' + escapeHtml(formatQty(e.hours)) + ' hrs</strong> — ' + escapeHtml(e.description || 'Labor') +
           '<div class="meta">' + escapeHtml(e.jobNumber ? 'Job ' + e.jobNumber : 'Unassigned') + ' · ' + escapeHtml(formatDate(e.date)) + '</div></div>' +
           '<div class="row-actions"><div>' + formatMoney((Number(e.hours) || 0) * rate) + '</div>' +
-            '<button type="button" class="btn-sm btn-secondary" onclick="editTime(' + Number(e.id) + ')">Edit</button>' +
-            '<button type="button" class="btn-sm btn-danger" onclick="deleteTime(' + Number(e.id) + ')">Delete</button></div></div>';
+            '<button type="button" class="btn-sm btn-secondary" onclick="editTime(' + jsId(e.id) + ')">Edit</button>' +
+            '<button type="button" class="btn-sm btn-danger" onclick="deleteTime(' + jsId(e.id) + ')">Delete</button></div></div>';
       }).join('') : '<p class="text-muted">No time entries yet.</p>') +
     '</div>';
 }
@@ -1250,7 +1317,8 @@ function saveTime() {
     showToast('Enter hours greater than zero.');
     return;
   }
-  var id = parseInt($('#time-id').value, 10);
+  if (!canSave()) return;
+  var id = $('#time-id').value;
   var entry = {
     date: $('#time-date').value || todayISO(),
     hours: hours,
@@ -1258,25 +1326,27 @@ function saveTime() {
     jobNumber: $('#time-job').value || '',
     rate: Number(state.settings.laborRate) || 0
   };
-  if (Number.isFinite(id)) {
-    var existing = state.timeEntries.find(function (row) { return row.id === id; });
+  if (id) {
+    var existing = state.timeEntries.find(function (row) { return sameId(row.id, id); });
     if (existing) {
-      entry.id = id;
+      entry.id = existing.id;
+      entry.version = existing.version || 0;
       if (existing.rate != null) entry.rate = existing.rate;
       Object.assign(existing, entry);
     }
   } else {
     entry.id = genId();
+    entry.version = 0;
     state.timeEntries.push(entry);
   }
-  if (saveData()) {
-    showToast('Time saved on this device.');
+  commitShop('Time saved in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
     renderTime();
-  }
+  });
 }
 
 function editTime(id) {
-  var e = state.timeEntries.find(function (row) { return row.id === id; });
+  var e = state.timeEntries.find(function (row) { return sameId(row.id, id); });
   if (!e) return;
   $('#time-id').value = e.id;
   $('#time-date').value = e.date || todayISO();
@@ -1294,10 +1364,13 @@ function editTime(id) {
 }
 
 function deleteTime(id) {
-  if (!confirm('Delete this time entry from this device?')) return;
-  state.timeEntries = state.timeEntries.filter(function (row) { return row.id !== id; });
-  saveData();
-  renderTime();
+  if (!confirm('Delete this time entry from the shared shop?')) return;
+  if (!canSave()) return;
+  state.timeEntries = state.timeEntries.filter(function (row) { return !sameId(row.id, id); });
+  commitShop('Time entry removed.').then(function (result) {
+    if (!result || !result.ok) return;
+    renderTime();
+  });
 }
 
 function renderSettings() {
@@ -1306,15 +1379,14 @@ function renderSettings() {
   var kb = 0;
   try { kb = storageKb(); } catch (err) { kb = 0; }
   el.innerHTML =
-    '<div class="notice" id="storage-notice"><strong>Stored on this device only</strong>' +
-      'Customers, vehicles, quotes, invoices, photos, and time stay in this browser under the key ' +
-      '<span id="storage-key">' + escapeHtml(STORAGE_KEY) + '</span>. They are not uploaded and do not sync to another phone or computer. ' +
-      'About <span id="storage-kb">' + kb + '</span> KB is in use here. Export a JSON backup if you want a copy. ' +
-      'Clearing browser data for this site deletes the records.' +
+    '<div class="notice" id="storage-notice"><strong>Shared shop cloud</strong>' +
+      'Customers, vehicles, quotes, invoices, photos, and these settings sync for everyone who signs in with the shop PIN. ' +
+      'There is no separate admin role. The PIN is only the shared sign-in, not a private permission. ' +
+      'Photos go to the private wrg-photos bucket. This page is not synced until the shop cloud is configured.' +
     '</div>' +
-    '<div class="notice"><strong>PIN is only a session gate</strong>' +
-      'The shop PIN is 1995. It hides the desk until it is entered again in this browser session. ' +
-      'It is not an account, and it does not encrypt records. Anyone who can open this browser’s site data can read them.' +
+    '<div class="notice"><strong>Defaults</strong>' +
+      'The hourly rate is used for new labor lines only: hours times that rate. Markup applies to parts and other charges, never labor, and only until someone types a different price. ' +
+      'Changing these defaults does not rewrite prices already saved on a quote or invoice.' +
     '</div>' +
     '<div class="card"><h3>Business info</h3>' +
       '<div class="form-group"><label for="set-name">Business name</label><input id="set-name" value="' + attr(s.businessName || '') + '"></div>' +
@@ -1325,24 +1397,26 @@ function renderSettings() {
     '</div>' +
     '<div class="card"><h3>Rates</h3>' +
       '<div class="row">' +
-        '<div class="form-group"><label for="set-labor">Labor rate ($/hr)</label><input type="number" step="0.01" id="set-labor" value="' + attr(s.laborRate) + '"></div>' +
-        '<div class="form-group"><label for="set-cost">Your cost rate ($/hr)</label><input type="number" step="0.01" id="set-cost" value="' + attr(s.laborCostRate) + '"></div>' +
+        '<div class="form-group"><label for="set-labor">Hourly labor rate</label><input type="number" step="0.01" id="set-labor" value="' + attr(s.laborRate) + '"></div>' +
+        '<div class="form-group"><label for="set-cost">Labor cost rate</label><input type="number" step="0.01" id="set-cost" value="' + attr(s.laborCostRate) + '"></div>' +
       '</div>' +
-      '<div class="row">' +
+      '<div class="field-stack">' +
         '<div class="form-group"><label for="set-tax">Tax rate (%)</label><input type="number" step="0.1" id="set-tax" value="' + attr(s.taxRate) + '"></div>' +
-        '<div class="form-group"><label for="set-markup">Default parts markup (%)</label><input type="number" step="0.1" id="set-markup" value="' + attr(s.partsMarkup) + '"></div>' +
+        '<div class="form-group"><label for="set-markup">Markup for parts and other charges (%)</label><input type="number" step="0.1" id="set-markup" value="' + attr(s.partsMarkup) + '"></div>' +
       '</div>' +
       '<div class="form-group"><label for="set-terms">Invoice terms</label><textarea id="set-terms">' + escapeHtml(s.terms || '') + '</textarea></div>' +
       '<button type="button" class="btn" id="save-settings" onclick="saveSettings()">Save settings</button>' +
     '</div>' +
-    '<div class="card"><h3>Backup</h3>' +
-      '<p class="help">The file contains whatever is on this device, including photos. Keep it private.</p>' +
-      '<button type="button" class="btn" id="export-btn" onclick="exportData()">Download JSON backup</button>' +
-      '<button type="button" class="btn btn-secondary" id="import-btn" onclick="importData()">Restore JSON backup</button>' +
+    '<div class="card"><h3>This phone’s old copy</h3>' +
+      '<p class="help">If this browser still has the earlier device-only records, you can copy them into the shop. Matching customers and job numbers are skipped. Nothing already in the shop is deleted.</p>' +
+      '<button type="button" class="btn" id="import-device" onclick="importDeviceRecords()">Copy this device into the shop</button>' +
+      '<p class="help">A JSON file is a private copy, not the live shop. Restoring one adds records that are not already there.</p>' +
+      '<button type="button" class="btn btn-secondary" id="export-btn" onclick="exportData()">Download JSON copy</button>' +
+      '<button type="button" class="btn btn-secondary" id="import-btn" onclick="importData()">Add records from a JSON file</button>' +
       '<input type="file" id="import-file" accept="application/json,.json" style="display:none" onchange="handleImport(event)">' +
     '</div>' +
     '<div class="card"><h3>Install on iPhone</h3>' +
-      '<p class="help">Open this site in Safari, tap Share, then Add to Home Screen. The icon uses the shop logo. After one online visit, the shell can open offline. Records still stay on that device.</p>' +
+      '<p class="help">In Safari, tap Share, then Add to Home Screen. After one online visit the shell can open offline in read-only mode. Saving still needs a connection.</p>' +
       '<button type="button" class="btn btn-secondary" id="lock-btn" onclick="lockApp()">Lock session</button>' +
     '</div>';
 }
@@ -1354,6 +1428,7 @@ function readNumber(id, fallback) {
 }
 
 function saveSettings() {
+  if (!canSave()) return;
   state.settings.businessName = ($('#set-name').value || '').trim() || BUSINESS_NAME;
   state.settings.ownerName = ($('#set-owner').value || '').trim();
   state.settings.address = $('#set-address').value || '';
@@ -1364,11 +1439,11 @@ function saveSettings() {
   state.settings.taxRate = readNumber('set-tax', 6);
   state.settings.partsMarkup = readNumber('set-markup', 40);
   state.settings.terms = $('#set-terms').value || '';
-  if (saveData()) {
+  commitShop('Shop defaults saved. Saved quotes and invoices keep their prices.').then(function (result) {
+    if (!result || !result.ok) return;
     refreshBrand();
-    showToast('Settings saved on this device.');
     renderSettings();
-  }
+  });
 }
 
 function exportData() {
@@ -1406,12 +1481,9 @@ function handleImport(e) {
   reader.onload = function () {
     try {
       var data = JSON.parse(reader.result);
-      if (!confirm('Replace all Will Ruby’s Garage records on this device with this backup?')) return;
-      applyPayload(data);
-      if (!saveData()) return;
-      refreshBrand();
-      showToast('Backup restored on this device.');
-      showView('dashboard');
+      if (!data || data.app !== 'will-rubys-garage') throw new Error('bad');
+      if (!confirm('Add records from this file into the shared shop? Existing shop records stay. Matching names and job numbers are skipped, not overwritten.')) return;
+      applyImportPlan(WrgSync.planDeviceImport(data, state));
     } catch (err) {
       showToast('That file is not a Will Ruby’s Garage backup.');
     }
@@ -1419,9 +1491,86 @@ function handleImport(e) {
   reader.readAsText(file);
 }
 
+function importDeviceRecords() {
+  var raw = null;
+  try { raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch (err) { raw = null; }
+  if (!raw || !Array.isArray(raw.customers)) {
+    showToast('This browser does not have an older device copy to copy.');
+    return;
+  }
+  if (!confirm('Copy this device’s old records into the shared shop? Records already in the shop are kept. Matching customers and job numbers are skipped.')) return;
+  applyImportPlan(WrgSync.planDeviceImport(raw, state), function () {
+    if (confirm('The shop now has the records that were not already there. Remove the old copy from this browser?')) {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  });
+}
+
+function applyImportPlan(plan, done) {
+  if (!canSave()) return;
+  var idMap = Object.assign({}, plan.customerMap || {});
+  (plan.customers || []).forEach(function (source) {
+    var id = genId();
+    idMap[String(source.id)] = id;
+    var vehicles = (source.vehicles || []).map(function (vehicle) {
+      return Object.assign(blankVehicle(), vehicle, { id: genId(), version: 0, customerId: id });
+    });
+    state.customers.push({
+      id: id,
+      version: 0,
+      legacyId: source.id,
+      name: source.name || '',
+      phone: source.phone || '',
+      email: source.email || '',
+      address: source.address || '',
+      vehicles: vehicles
+    });
+  });
+  (plan.vehicles || []).forEach(function (entry) {
+    var customer = findCustomer(entry.customerId);
+    if (!customer) return;
+    if (!customer.vehicles) customer.vehicles = [];
+    customer.vehicles.push(Object.assign(blankVehicle(), entry.source, { id: genId(), version: 0, customerId: customer.id }));
+  });
+  function addDocs(list, target) {
+    (list || []).forEach(function (source) {
+      var copy = cloneDoc(source);
+      copy.id = genId();
+      copy.version = 0;
+      copy.legacyId = source.id;
+      if (copy.customerId && idMap[String(copy.customerId)]) copy.customerId = idMap[String(copy.customerId)];
+      (copy.photos || []).forEach(function (photo) {
+        photo.id = genId();
+        photo.version = 0;
+        photo.storagePath = '';
+      });
+      target.push(copy);
+    });
+  }
+  addDocs(plan.quotes, state.quotes);
+  addDocs(plan.invoices, state.invoices);
+  (plan.timeEntries || []).forEach(function (source) {
+    state.timeEntries.push({
+      id: genId(),
+      version: 0,
+      date: source.date,
+      hours: source.hours,
+      description: source.description || 'Labor',
+      jobNumber: source.jobNumber || '',
+      rate: source.rate
+    });
+  });
+  commitShop('Added the records that were not already in the shop.').then(function (result) {
+    if (!result || !result.ok) return;
+    if (done) done();
+    showView('dashboard');
+  });
+}
+
 function lockApp() {
-  try { sessionStorage.removeItem(SESSION_KEY); } catch (err) { /* ignore */ }
-  location.reload();
+  var finish = function () { location.reload(); };
+  if (window.WrgCloud && WrgCloud.signOut) WrgCloud.signOut().then(finish, finish);
+  else finish();
 }
 
 var pinEntered = '';
@@ -1435,7 +1584,7 @@ function showPinScreen() {
     '<div class="pin-card">' +
       '<img src="icon-192.png" alt="Will Ruby’s Garage">' +
       '<h2>Will Ruby’s Garage</h2>' +
-      '<p class="text-muted">Enter the shop PIN for this session</p>' +
+      '<p class="text-muted">Enter the shared shop PIN for this session</p>' +
       '<div id="pin-display" class="pin-dots">••••</div>' +
       '<div class="pin-grid">' +
         [1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map(function (n) {
@@ -1461,21 +1610,21 @@ function pressPin(key) {
   else if (pinEntered.length < 4) pinEntered += key;
   display.textContent = pinEntered.length ? '•'.repeat(pinEntered.length) : '••••';
   if (pinEntered.length !== 4) return;
-  if (pinEntered === '1995') {
-    try { sessionStorage.setItem(SESSION_KEY, 'ok'); } catch (err) { /* private mode */ }
+  var pin = pinEntered;
+  pinEntered = '';
+  if (error) error.textContent = 'Checking the shop…';
+  WrgCloud.signIn(pin).then(function (result) {
+    pin = '';
+    if (!result || !result.ok) {
+      if (error) error.textContent = (result && result.message) || 'Incorrect PIN';
+      var again = $('#pin-display');
+      if (again) again.textContent = '••••';
+      return;
+    }
     var overlay = $('#pin-overlay');
     if (overlay) overlay.remove();
     initApp();
-    return;
-  }
-  if (error) error.textContent = 'Incorrect PIN';
-  pinEntered = '';
-  setTimeout(function () {
-    var again = $('#pin-display');
-    var err = $('#pin-error');
-    if (again) again.textContent = '••••';
-    if (err) err.textContent = '';
-  }, 700);
+  });
 }
 
 function onPinKeydown(e) {
@@ -1494,24 +1643,149 @@ function registerServiceWorker() {
   });
 }
 
+function setSyncStatus(shopStatus) {
+  var el = document.getElementById('sync-status');
+  if (!el) return;
+  shopStatus = shopStatus || (window.WrgCloud ? WrgCloud.status() : {});
+  el.classList.remove('sync-ok', 'sync-warn', 'sync-bad');
+  if (!shopStatus.configured) {
+    el.textContent = 'Setup needed';
+    el.classList.add('sync-bad');
+  } else if (shopStatus.loading) {
+    el.textContent = 'Loading shop…';
+    el.classList.add('sync-warn');
+  } else if (!shopStatus.online || shopStatus.readOnly) {
+    el.textContent = 'Offline — read only';
+    el.classList.add('sync-warn');
+  } else if (shopStatus.signedIn && shopStatus.member) {
+    el.textContent = 'Synced';
+    el.classList.add('sync-ok');
+  } else {
+    el.textContent = 'Sign in needed';
+    el.classList.add('sync-warn');
+  }
+}
+
+function showSetupScreen() {
+  if ($('#setup-overlay')) return;
+  var overlay = document.createElement('div');
+  overlay.id = 'setup-overlay';
+  overlay.className = 'pin-overlay';
+  overlay.innerHTML = '<div class="pin-card" style="text-align:left"><img src="icon-192.png" alt="">' +
+    '<h2>Shop cloud is not configured</h2>' +
+    '<p class="help">This phone is not syncing. Add the public Supabase anon key to wrg-config.js, run wrg-setup.sql in the garage project, and create the shared shop sign-in. Do not put a service-role key in the app. Records stay unavailable until that setup is finished.</p></div>';
+  document.body.appendChild(overlay);
+  setSyncStatus({ configured: false });
+}
+
+function showConflictBanner(conflicts) {
+  var el = document.getElementById('conflict-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'conflict-banner';
+    el.className = 'conflict-banner';
+    document.getElementById('app').insertBefore(el, document.querySelector('.view'));
+  }
+  el.hidden = false;
+  var first = conflicts[0] || {};
+  el.innerHTML = '<strong>Another phone saved first.</strong> ' + escapeHtml(first.message || 'Your edit was not written over that record.') +
+    ' <button type="button" class="btn-sm" id="load-theirs" onclick="loadTheirVersion()">Load their version</button>';
+}
+
+function loadTheirVersion() {
+  currentQuote = null;
+  var editor = document.getElementById('view-quote-editor');
+  if (editor) editor.classList.remove('active');
+  WrgCloud.load().then(function () {
+    var banner = document.getElementById('conflict-banner');
+    if (banner) banner.hidden = true;
+    showView('dashboard');
+  });
+}
+
+function adoptShopState(next, conflicts) {
+  var editor = document.getElementById('view-quote-editor');
+  var editorOpen = editor && editor.classList.contains('active') && currentQuote;
+  if (editorOpen) syncQuoteForm();
+  var keep = editorOpen ? cloneDoc(currentQuote) : null;
+  state.settings = next.settings || state.settings;
+  state.customers = next.customers || [];
+  state.quotes = next.quotes || [];
+  state.invoices = next.invoices || [];
+  state.timeEntries = next.timeEntries || [];
+  if (keep) {
+    var list = editKind === 'invoice' ? state.invoices : state.quotes;
+    var incoming = list.find(function (row) { return sameId(row.id, keep.id); });
+    if (incoming && WrgSync.documentFingerprint(keep) === WrgSync.documentFingerprint(incoming)) {
+      var step = keep.guideStep;
+      keep = cloneDoc(incoming);
+      if (step) keep.guideStep = step;
+    } else if (incoming && (incoming.version || 0) !== (keep.version || 0)) {
+      showConflictBanner([{ id: keep.id, message: 'Another phone saved this job. Your edit was not written over it.' }]);
+    }
+    currentQuote = keep;
+    var idx = list.findIndex(function (row) { return sameId(row.id, keep.id); });
+    if (idx >= 0) list[idx] = keep;
+    else list.push(keep);
+  }
+  refreshBrand();
+  if (conflicts && conflicts.length) showConflictBanner(conflicts);
+  if (!editorOpen) {
+    var active = document.querySelector('.view.active');
+    var name = active ? active.id.replace('view-', '') : 'dashboard';
+    if (name !== 'quote-editor' && name !== 'customer-detail' && name !== 'invoice') {
+      var renderers = { dashboard: renderDashboard, customers: renderCustomers, quotes: renderQuotes, invoices: renderInvoices, time: renderTime, settings: renderSettings };
+      if (renderers[name]) renderers[name]();
+    }
+  }
+  setSyncStatus(WrgCloud.status());
+}
+
+function shopDirtyIds() {
+  var shadow = WrgCloud.shadow && WrgCloud.shadow();
+  if (!shadow) return [];
+  var editor = document.getElementById('view-quote-editor');
+  if (editor && editor.classList.contains('active')) syncQuoteForm();
+  return WrgSync.planPersist(state, shadow).map(function (op) {
+    return String(op.id || (op.row && op.row.id) || '');
+  }).filter(Boolean);
+}
+
+function shopState() { return state; }
+
 function initApp() {
   if (appStarted) return;
   appStarted = true;
-  loadData();
-  refreshBrand();
   $all('.nav-btn').forEach(function (btn) {
     btn.addEventListener('click', function () { showView(btn.getAttribute('data-view')); });
   });
-  showView('dashboard');
+  setSyncStatus({ configured: true, loading: true, signedIn: true, member: true, online: true });
+  var pending = WrgCloud.load ? WrgCloud.load() : Promise.resolve();
+  Promise.resolve(pending).then(function () {
+    refreshBrand();
+    setSyncStatus(WrgCloud.status());
+    showView('dashboard');
+  }).catch(function (err) {
+    showToast(err && err.message ? err.message : 'The shop records could not be loaded.');
+    setSyncStatus(WrgCloud.status());
+  });
 }
 
 function init() {
   document.addEventListener('keydown', onPinKeydown);
   registerServiceWorker();
-  var unlocked = false;
-  try { unlocked = sessionStorage.getItem(SESSION_KEY) === 'ok'; } catch (err) { unlocked = false; }
-  if (unlocked) initApp();
-  else showPinScreen();
+  window.adoptShopState = adoptShopState;
+  window.shopDirtyIds = shopDirtyIds;
+  window.shopState = shopState;
+  window.setSyncStatus = setSyncStatus;
+  if (!window.WrgCloud || !WrgCloud.isConfigured()) {
+    showSetupScreen();
+    return;
+  }
+  WrgCloud.restoreSession().then(function (session) {
+    if (session && session.ok) initApp();
+    else showPinScreen();
+  }).catch(function () { showPinScreen(); });
 }
 
 document.addEventListener('DOMContentLoaded', init);
