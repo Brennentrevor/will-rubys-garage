@@ -5,7 +5,7 @@
   var current = window.WRG_CONFIG || {};
   window.WRG_CONFIG = {
     supabaseUrl: current.supabaseUrl || 'https://evgpnpqtnemlbnygpbxs.supabase.co',
-    supabaseAnonKey: current.supabaseAnonKey || '',
+    supabaseAnonKey: current.supabaseAnonKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2Z3BucHF0bmVtbGJueWdwYnhzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMzMjcyMzMsImV4cCI6MjEwODkwMzIzM30.IskAOHWOcOTADboLGe_HlA-S8h4z0PSa8eHhde1sSX4',
     shopEmail: current.shopEmail || 'wrg-shop@garage.example',
     accessPrefix: current.accessPrefix || 'wrg-access-'
   };

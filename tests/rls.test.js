@@ -42,6 +42,12 @@ test('photo bucket stays private', () => {
   assert.ok(/bucket_id = 'wrg-photos' and public\.wrg_is_member\(\)/.test(sql));
 });
 
+test('membership table is created before the SQL helper that reads it', () => {
+  const tableAt = executable.indexOf('create table if not exists public.wrg_members');
+  const fnAt = executable.indexOf('create or replace function public.wrg_is_member()');
+  assert.ok(tableAt !== -1 && fnAt !== -1 && tableAt < fnAt);
+});
+
 test('script does not grant maintenance or timekeeping access and does not insert a member', () => {
   assert.ok(!/grant[\s\S]{0,80}maintenance/i.test(executable));
   assert.ok(!/grant[\s\S]{0,80}timekeeping/i.test(executable));

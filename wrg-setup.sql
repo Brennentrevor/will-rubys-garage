@@ -15,6 +15,13 @@
 --    Replace the zero UUID before running. The placeholder is not a real member.
 -- 3. Do not add maintenance or timekeeping users. Only wrg_members can read or write.
 
+-- Create the membership table before wrg_is_member(). PostgreSQL checks a
+-- SQL-language function body at creation time, so the table must already exist.
+create table if not exists public.wrg_members (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 create or replace function public.wrg_is_member()
 returns boolean
 language sql
@@ -48,11 +55,6 @@ begin
   return new;
 end;
 $$;
-
-create table if not exists public.wrg_members (
-  user_id uuid primary key references auth.users (id) on delete cascade,
-  created_at timestamptz not null default now()
-);
 
 create table if not exists public.wrg_settings (
   id integer primary key default 1 check (id = 1),
